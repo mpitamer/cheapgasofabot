@@ -23,7 +23,7 @@ El bot compara gasóleo A por defecto. Con una ubicación, empieza en 2,5 km en 
 
 Las consultas de texto usan un índice de códigos postales, localidades y municipios. Aceptan mayúsculas, tildes y guiones. Si no hay coincidencia exacta, también se busca por el principio de un nombre compuesto y se admite una letra de diferencia en nombres de cinco o más caracteres. Un código postal evita confundir localidades homónimas.
 
-El catálogo del Ministerio se actualiza al arrancar y cada 20 minutos. Si la descarga falla, el bot sigue usando la última copia válida y muestra su fecha. Si arranca sin datos, puede responder a los comandos de ayuda mientras espera la descarga. [Servicio oficial de carburantes](https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/EstacionesTerrestres/)
+El catálogo del Ministerio se actualiza al arrancar y cada 20 minutos. Si la descarga falla, el bot sigue usando la última copia válida y muestra su fecha. Si arranca sin datos, puede responder a los comandos de ayuda mientras espera la descarga. [Servicio oficial de carburantes](https://energia.serviciosmin.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/EstacionesTerrestres/)
 
 ## Menú de BotFather
 

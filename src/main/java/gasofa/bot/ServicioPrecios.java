@@ -14,7 +14,7 @@ import java.util.concurrent.*;
  * @author Moisés Pita Merino
  */
 final class ServicioPrecios implements AutoCloseable {
-    private static final URI ORIGEN = URI.create("https://sedeaplicaciones.minetur.gob.es/"
+    private static final URI ORIGEN = URI.create("https://energia.serviciosmin.gob.es/"
             + "ServiciosRESTCarburantes/PreciosCarburantes/EstacionesTerrestres/");
     private static final System.Logger LOG = System.getLogger(ServicioPrecios.class.getName());
     private final Path cache;
