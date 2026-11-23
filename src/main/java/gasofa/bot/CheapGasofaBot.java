@@ -47,7 +47,7 @@ final class CheapGasofaBot implements LongPollingSingleThreadUpdateConsumer {
     private final LinkedHashMap<String, Busqueda> busquedas = new LinkedHashMap<>();
 
     private final TelegramClient telegram;
-    private final Supplier<Catalogo> precios;
+    private final Supplier<ServicioPrecios.Estado> precios;
     private final String usuarioBot;
     // El consumidor procesa las actualizaciones en serie. Solo guardamos la preferencia reciente.
     private final LinkedHashMap<Sesion, Combustible> preferencias = new LinkedHashMap<>(16, 0.75f, true);
@@ -56,7 +56,7 @@ final class CheapGasofaBot implements LongPollingSingleThreadUpdateConsumer {
      * Recibe el transporte, un proveedor que consulta el catálogo vigente y el nombre del bot usado
      * para filtrar comandos de grupo.
      */
-    CheapGasofaBot(TelegramClient telegram, Supplier<Catalogo> precios, String usuarioBot) {
+    CheapGasofaBot(TelegramClient telegram, Supplier<ServicioPrecios.Estado> precios, String usuarioBot) {
         this.telegram = telegram;
         this.precios = precios;
         this.usuarioBot = usuarioBot;
@@ -112,17 +112,18 @@ final class CheapGasofaBot implements LongPollingSingleThreadUpdateConsumer {
             consulta = partes[1];
         }
         if (!mensaje.hasLocation() && consulta.isBlank()) return;
-        var catalogo = precios.get();
+        var estado = precios.get();
+        var catalogo = estado.catalogo();
         if (catalogo == null) {
-            enviar(chat, "El catálogo de precios aún no está disponible. Vuelve a intentarlo más tarde.");
+            enviar(chat, estado.aviso());
             return;
         }
         var posicion = mensaje.getLocation();
         var busqueda = new Busqueda(sesion, consulta, posicion == null ? null : posicion.getLatitude(),
                 posicion == null ? null : posicion.getLongitude());
         String clave = UUID.randomUUID().toString();
-        var listado = listado(catalogo, clave, busqueda, tipo);
-        telegram.execute(SendMessage.builder().chatId(chat).text(listado.texto()).replyMarkup(listado.teclado()).build());
+        var listado = listado(estado, clave, busqueda, tipo);
+        telegram.execute(SendMessage.builder().chatId(chat).parseMode("HTML").text(listado.texto()).replyMarkup(listado.teclado()).build());
         busquedas.put(clave, busqueda);
         if (busquedas.size() > 10_000) busquedas.pollFirstEntry();
     }
@@ -145,23 +146,27 @@ final class CheapGasofaBot implements LongPollingSingleThreadUpdateConsumer {
      * Calcula las estaciones y numera cada botón según su posición en el texto. El selector de
      * combustible sigue disponible si no hay resultados.
      */
-    private Listado listado(Catalogo catalogo, String clave, Busqueda busqueda, Combustible tipo) {
+    private Listado listado(ServicioPrecios.Estado estado, String clave, Busqueda busqueda, Combustible tipo) {
+        var catalogo = estado.catalogo();
         var resultados = busqueda.latitud() == null ? catalogo.porLugar(busqueda.lugar(), tipo)
                 : catalogo.cercanas(busqueda.latitud(), busqueda.longitud(), tipo);
-        var texto = new StringBuilder("Opciones por precio · ").append(tipo.nombre);
+        var texto = new StringBuilder("<b>").append(tipo.nombre).append(" · Opciones por precio</b>");
+        if (!estado.aviso().isEmpty()) texto.append("\n<i>").append(estado.aviso()).append("</i>");
         var filas = new ArrayList<InlineKeyboardRow>();
         for (var resultado : resultados) {
             var g = resultado.estacion();
             int numero = filas.size() + 1;
-            texto.append("\n\n").append(numero).append(". ").append(ficha(resultado, tipo));
+            texto.append("\n\n").append("<b>").append(numero).append(". ").append(ficha(resultado, tipo));
             filas.add(new InlineKeyboardRow(InlineKeyboardButton.builder()
                     .text(numero + " · Obtener ubicación").callbackData("ubic:" + g.id()).build()));
         }
-        texto.append("\n\nDatos del Ministerio: ").append(catalogo.fecha.isBlank() ? "fecha desconocida" : catalogo.fecha);
+
         if (resultados.isEmpty()) {
             texto.append("\n\nNo he encontrado precios de ").append(tipo.nombre)
                     .append(busqueda.latitud() == null ? " para ese lugar." : " en 50 km.");
         }
+        texto.append("\n\n<i>Datos del Ministerio · ")
+                .append(catalogo.fecha.isBlank() ? "fecha desconocida" : html(catalogo.fecha)).append("</i>");
         var selector = new InlineKeyboardRow();
         for (String comando : List.of("/diesel", "/gasolina95", "/gasolina98")) {
             var alternativa = COMANDOS.get(comando);
@@ -192,15 +197,16 @@ final class CheapGasofaBot implements LongPollingSingleThreadUpdateConsumer {
             telegram.execute(respuesta.text("Envía tu propia búsqueda para elegir combustible.").build());
             return;
         }
-        var catalogo = precios.get();
+        var estado = precios.get();
+        var catalogo = estado.catalogo();
         if (catalogo == null) {
             telegram.execute(respuesta.text("Catálogo no disponible. Inténtalo más tarde.").build());
             return;
         }
-        var listado = listado(catalogo, partes[1], busqueda, tipo);
+        var listado = listado(estado, partes[1], busqueda, tipo);
         String confirmacion = "Combustible cambiado a " + tipo.nombre;
         telegram.execute(EditMessageText.builder().chatId(mensaje.getChatId()).messageId(mensaje.getMessageId())
-                .text(listado.texto()).replyMarkup(listado.teclado()).build());
+                .parseMode("HTML").text(listado.texto()).replyMarkup(listado.teclado()).build());
         guardarPreferencia(busqueda.sesion(), tipo);
         telegram.execute(respuesta.text(confirmacion).build());
     }
@@ -213,7 +219,8 @@ final class CheapGasofaBot implements LongPollingSingleThreadUpdateConsumer {
      * Envía respuestas de texto sin teclado, como la ayuda y los avisos de disponibilidad.
      */
     private void enviarUbicacion(CallbackQuery consulta) throws TelegramApiException {
-        var catalogo = precios.get();
+        var estado = precios.get();
+        var catalogo = estado.catalogo();
         String datos = consulta.getData();
         var estacion = datos != null && datos.startsWith("ubic:") && catalogo != null
                 ? catalogo.estacion(datos.substring(5)) : null;
@@ -235,13 +242,16 @@ final class CheapGasofaBot implements LongPollingSingleThreadUpdateConsumer {
      */
     private static String ficha(Catalogo.Resultado resultado, Combustible tipo) {
         var g = resultado.estacion();
-        var texto = new StringBuilder(nombreVisible(g)).append(" · ").append(precio(g, tipo)).append(" €/l")
-                .append("\n").append(g.direccion()).append("\n")
-                .append(g.cp()).append(" ").append(g.localidad()).append(" (").append(g.provincia()).append(")");
+        var texto = new StringBuilder(html(nombreVisible(g))).append("</b>\n<b>")
+                .append(precio(g, tipo)).append(" € por litro</b>");
         if (Double.isFinite(resultado.distanciaKm())) {
-            texto.append(String.format(Locale.forLanguageTag("es-ES"), "\nA %.2f km en línea recta", resultado.distanciaKm()));
+            texto.append(String.format(Locale.forLanguageTag("es-ES"), " · %.2f km en línea recta", resultado.distanciaKm()));
         }
-        if (!g.horario().isBlank()) texto.append("\nHorario: ").append(g.horario());
+        if (!g.direccion().isBlank()) texto.append("\n").append(html(g.direccion()));
+        String localidad = String.join(" ", g.cp(), g.localidad()).strip();
+        if (!g.provincia().isBlank()) localidad += localidad.isEmpty() ? g.provincia() : " (" + g.provincia() + ")";
+        if (!localidad.isBlank()) texto.append("\n").append(html(localidad));
+        if (!g.horario().isBlank()) texto.append("\n<i>Horario · ").append(html(g.horario())).append("</i>");
         return texto.toString();
     }
 
@@ -258,6 +268,10 @@ final class CheapGasofaBot implements LongPollingSingleThreadUpdateConsumer {
      */
     private static String precio(Gasolinera g, Combustible tipo) {
         return g.precios().get(tipo).toPlainString().replace('.', ',');
+    }
+
+    private static String html(String valor) {
+        return valor.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
     private void enviar(long chat, String texto) throws TelegramApiException {

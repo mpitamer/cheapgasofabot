@@ -28,6 +28,11 @@ public final class GasofaPpal {
             token = Files.readString(archivo);
         }
         if (token == null || token.isBlank()) {
+            try (var recurso = GasofaPpal.class.getResourceAsStream("/.telegram-token")) {
+                if (recurso != null) token = new String(recurso.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            }
+        }
+        if (token == null || token.isBlank()) {
             throw new IllegalStateException("Configura .telegram-token o TELEGRAM_BOT_TOKEN para iniciar el bot.");
         }
         var cliente = new OkHttpTelegramClient(token.strip());

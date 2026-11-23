@@ -34,10 +34,14 @@ class CheapGasofaBotTest {
                     return null;
                 });
         var catalogo = CatalogoTest.catalogo();
-        var bot = new CheapGasofaBot(cliente, () -> catalogo, "cheap_bot");
+        var bot = new CheapGasofaBot(cliente, () -> new ServicioPrecios.Estado(catalogo, "Últimos datos guardados"), "cheap_bot");
         bot.consume(mensaje("\"location\":{\"latitude\":40,\"longitude\":-3}"));
         assertEquals(1, enviados.size());
         var menu = assertInstanceOf(SendMessage.class, enviados.getFirst());
+        assertEquals("HTML", menu.getParseMode());
+        assertTrue(menu.getText().contains(" € por litro</b>"));
+        assertFalse(menu.getText().contains("/l"));
+        assertTrue(menu.getText().contains("Últimos datos guardados"));
         var teclado = ((InlineKeyboardMarkup) menu.getReplyMarkup()).getKeyboard();
         assertEquals(4, teclado.size());
         var cambio = new CallbackQuery();
@@ -50,6 +54,7 @@ class CheapGasofaBotTest {
         enviados.clear();
         bot.consume(pulsacion);
         var actualizado = assertInstanceOf(EditMessageText.class, enviados.getFirst());
+        assertEquals("HTML", actualizado.getParseMode());
         assertTrue(actualizado.getText().contains("Gasolina 95 E5"));
         assertTrue(actualizado.getText().contains("2. Norte"));
         assertTrue(assertInstanceOf(AnswerCallbackQuery.class, enviados.getLast()).getText().contains("cambiado"));

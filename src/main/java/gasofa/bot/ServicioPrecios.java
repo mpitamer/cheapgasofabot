@@ -21,13 +21,21 @@ final class ServicioPrecios implements AutoCloseable {
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8))
             .followRedirects(HttpClient.Redirect.NORMAL).build();
     private final ScheduledExecutorService tarea = Executors.newSingleThreadScheduledExecutor();
-    private volatile Catalogo catalogo;
+    /** Publica el catálogo y su aviso juntos para que cada consulta sea coherente. */
+    record Estado(Catalogo catalogo, String aviso) {}
+    private volatile Estado estado = new Estado(null, "Estoy descargando los precios del Ministerio. Inténtalo en unos instantes.");
+    private final URI origen;
 
     /**
      * Fija la ruta de la caché. El temporal se crea en el mismo directorio para permitir el reemplazo
      * atómico.
      */
     ServicioPrecios(Path cache) {
+        this(cache, ORIGEN);
+    }
+
+    ServicioPrecios(Path cache, URI origen) {
+        this.origen = origen;
         this.cache = cache.toAbsolutePath();
     }
 
@@ -36,21 +44,25 @@ final class ServicioPrecios implements AutoCloseable {
      * el comienzo del siguiente transcurren veinte minutos.
      */
     void iniciar() {
+        cargarCopia();
+        tarea.scheduleWithFixedDelay(this::refrescar, 0, 20, TimeUnit.MINUTES);
+    }
+
+    void cargarCopia() {
         if (Files.isRegularFile(cache)) {
             try {
-                catalogo = leer(cache);
+                estado = new Estado(leer(cache), "Mostrando la última copia guardada mientras se consultan los precios.");
             } catch (IOException e) {
                 LOG.log(System.Logger.Level.WARNING, "Copia local ilegible", e);
             }
         }
-        tarea.scheduleWithFixedDelay(this::refrescar, 0, 20, TimeUnit.MINUTES);
     }
 
     /**
-     * Devuelve el catálogo publicado o {@code null} mientras todavía no hay ninguna copia válida.
+     * Devuelve una instantánea del catálogo disponible y del estado de la última actualización.
      */
-    Catalogo actual() {
-        return catalogo;
+    Estado actual() {
+        return estado;
     }
 
     /**
@@ -67,7 +79,7 @@ final class ServicioPrecios implements AutoCloseable {
      * catálogo en memoria. Un fallo conserva la copia anterior.
      */
     void actualizar() throws IOException, InterruptedException {
-        var peticion = HttpRequest.newBuilder(ORIGEN).timeout(Duration.ofSeconds(40))
+        var peticion = HttpRequest.newBuilder(origen).timeout(Duration.ofSeconds(40))
                 .header("Accept", "application/json").GET().build();
         Path temporal = Files.createTempFile(cache.getParent(), "precios-", ".tmp");
         try {
@@ -75,7 +87,7 @@ final class ServicioPrecios implements AutoCloseable {
             if (respuesta.statusCode() != 200) throw new IOException("HTTP " + respuesta.statusCode());
             Catalogo nuevo = leer(temporal);
             Files.move(temporal, cache, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            catalogo = nuevo;
+            estado = new Estado(nuevo, "");
         } finally {
             Files.deleteIfExists(temporal);
         }
@@ -85,12 +97,16 @@ final class ServicioPrecios implements AutoCloseable {
      * Aísla los fallos de cada intento para que el planificador siga ejecutando las siguientes
      * descargas.
      */
-    private void refrescar() {
+    void refrescar() {
         try {
             actualizar();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } catch (IOException | RuntimeException e) {
+            var anterior = estado.catalogo();
+            estado = new Estado(anterior, anterior == null
+                    ? "No he podido actualizar los precios del Ministerio y aún no hay una copia disponible. Vuelve a intentarlo más tarde."
+                    : "No he podido actualizar los precios del Ministerio. Te muestro los últimos datos guardados.");
             LOG.log(System.Logger.Level.WARNING, "No se pudo actualizar el catálogo", e);
         }
     }
